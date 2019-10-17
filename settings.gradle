@@ -1,0 +1,2 @@
+include ':app', ':mycamera'
+rootProject.name='MyLibrary'
