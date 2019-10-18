@@ -1,6 +1,7 @@
 package com.trenser.mycamera
 
 import android.Manifest
+import android.content.ContentValues
 import android.content.Context
 import android.content.pm.PackageManager
 import android.graphics.ImageFormat
@@ -10,9 +11,12 @@ import android.hardware.camera2.*
 import android.hardware.camera2.params.StreamConfigurationMap
 import android.media.Image
 import android.media.ImageReader
+import android.net.Uri
+import android.os.Build
 import android.os.Environment
 import android.os.Handler
 import android.os.HandlerThread
+import android.provider.MediaStore
 import android.util.AttributeSet
 import android.util.Log
 import android.util.Size
@@ -23,6 +27,7 @@ import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
 import java.io.*
+import java.lang.Long
 import java.util.*
 import kotlin.collections.ArrayList
 
@@ -30,11 +35,22 @@ class CameraView:RelativeLayout{
 
     interface ICameraViewCallback{
         fun onCameraError(errorCode:Int)
-        fun onImageCaptured()
+        fun onImageCaptured(uri: Uri){}
+    }
+
+    enum class FlashMode(val value:Int){
+        AUTO(0),
+        ON(1),
+        OFF(2)
     }
 
     companion object{
         private val TAG = "CameraView"
+        // Max preview width that is guaranteed by Camera2 API
+        private const val MAX_PREVIEW_WIDTH = 1920
+        // Max preview height that is guaranteed by Camera2 API
+        private const val MAX_PREVIEW_HEIGHT = 1080
+
         private val ORIENTATIONS = SparseIntArray().apply {
             append(Surface.ROTATION_0, 90)
             append(Surface.ROTATION_90, 0)
@@ -49,9 +65,11 @@ class CameraView:RelativeLayout{
     protected var cameraDevice: CameraDevice? = null
     private var mBackgroundHandler: Handler? = null
     private var mBackgroundThread: HandlerThread? = null
+
+    private var mFlashSupported: Boolean = false
     private var imageDimension: Size? = null
     private var imageReader: ImageReader? = null
-    private var file: File? = null
+    private var fileUri: Uri? = null
 
     protected var cameraCaptureSessions: CameraCaptureSession? = null
     protected var captureRequestBuilder: CaptureRequest.Builder? = null
@@ -64,6 +82,9 @@ class CameraView:RelativeLayout{
 
     var cameraViewCallback: ICameraViewCallback?=null
     var isFrontCamera = false
+    var flashMode:FlashMode = FlashMode.AUTO
+    var cameraDir = "ImagePickerLibrary"
+    var imageRatio = 4f/3f
 
     constructor(context: Context) : super(context) {
         init(context, null, 0)
@@ -100,7 +121,7 @@ class CameraView:RelativeLayout{
         a.recycle()
     }
 
-    var textureListener: TextureView.SurfaceTextureListener = object : TextureView.SurfaceTextureListener {
+    val textureListener: TextureView.SurfaceTextureListener = object : TextureView.SurfaceTextureListener {
         override fun onSurfaceTextureAvailable(surface: SurfaceTexture, width: Int, height: Int) {
             //open your camera here
             openCamera()
@@ -209,38 +230,41 @@ class CameraView:RelativeLayout{
         }
     }
 
-    fun createCameraPreview() {
+    private fun createCameraPreview() {
         try {
             val texture = textureView.getSurfaceTexture()
-            texture.setDefaultBufferSize(imageDimension!!.getWidth(), imageDimension!!.getHeight())
-            val surface = Surface(texture)
-            captureRequestBuilder =
-                cameraDevice?.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW)
-            captureRequestBuilder?.addTarget(surface)
+            texture?.let {
+                texture.setDefaultBufferSize(imageDimension!!.getWidth(), imageDimension!!.getHeight())
+                val surface = Surface(texture)
+                captureRequestBuilder =
+                    cameraDevice?.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW)
+                captureRequestBuilder?.addTarget(surface)
 
-            cameraDevice!!.createCaptureSession(
-                Arrays.asList(surface),
-                object : CameraCaptureSession.StateCallback() {
-                    override fun onConfigured(cameraCaptureSession: CameraCaptureSession) {
-                        //The camera is already closed
-                        if (null == cameraDevice) {
-                            return
+                cameraDevice!!.createCaptureSession(
+                    Arrays.asList(surface),
+                    object : CameraCaptureSession.StateCallback() {
+                        override fun onConfigured(cameraCaptureSession: CameraCaptureSession) {
+                            //The camera is already closed
+                            if (null == cameraDevice) {
+                                return
+                            }
+                            // When the session is ready, we start displaying the preview.
+                            cameraCaptureSessions = cameraCaptureSession
+                            updatePreview()
                         }
-                        // When the session is ready, we start displaying the preview.
-                        cameraCaptureSessions = cameraCaptureSession
-                        updatePreview()
-                    }
 
-                    override fun onConfigureFailed(cameraCaptureSession: CameraCaptureSession) {
-                        Toast.makeText(
-                            context,
-                            "Configuration change",
-                            Toast.LENGTH_SHORT
-                        ).show();
-                    }
-                },
-                null
-            )
+                        override fun onConfigureFailed(cameraCaptureSession: CameraCaptureSession) {
+                            Toast.makeText(
+                                context,
+                                "Configuration change",
+                                Toast.LENGTH_SHORT
+                            ).show();
+                        }
+                    },
+                    null
+                )
+            }
+
         } catch (e: CameraAccessException) {
             e.printStackTrace()
         }
@@ -272,11 +296,22 @@ class CameraView:RelativeLayout{
             val characteristics = manager.getCameraCharacteristics(cameraId!!)
 
             cameraCharacteristics = characteristics
-            maximumZoomLevel =
-                characteristics.get(CameraCharacteristics.SCALER_AVAILABLE_MAX_DIGITAL_ZOOM) ?: 0f
+            maximumZoomLevel = characteristics.get(CameraCharacteristics.SCALER_AVAILABLE_MAX_DIGITAL_ZOOM) ?: 0f
+            mFlashSupported = characteristics.get(CameraCharacteristics.FLASH_INFO_AVAILABLE)?:false
 
             val map = characteristics.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
-            imageDimension = map?.getOutputSizes(ImageFormat.JPEG)?.get(0)
+            imageDimension = map?.let {
+                val previewCandidate = it.getOutputSizes(SurfaceTexture::class.java)
+                    .filter {
+                        (Math.abs(it.width/it.height.toDouble() - imageRatio.toDouble())<=0.1) && it.width <= MAX_PREVIEW_WIDTH && it.height <= MAX_PREVIEW_HEIGHT
+                    }
+                if(previewCandidate.size>0){
+                    Collections.max(previewCandidate, CompareSizesByArea())
+                }else{
+                    it.getOutputSizes(ImageFormat.JPEG)?.get(0)
+                }
+            }
+            //imageDimension = map?.getOutputSizes(ImageFormat.JPEG)?.get(0)
 
             // Add permission for camera and let user grant the permission
             if (ActivityCompat.checkSelfPermission(
@@ -309,7 +344,7 @@ class CameraView:RelativeLayout{
         }
     }
 
-    protected fun updatePreview() {
+    private fun updatePreview() {
         if (null == cameraDevice) {
             Log.e(TAG, "updatePreview error, return")
         }
@@ -327,12 +362,42 @@ class CameraView:RelativeLayout{
 
 
     //region Public api
-    fun zoomCamera(cameraZoomEvent: Boolean) {
+    fun switchCamera(){
+        isFrontCamera = !isFrontCamera
+        onPause()
+        onResume()
+    }
+
+    fun setFlashMode(flashMode:FlashMode):Boolean{
+        if(mFlashSupported){
+            when(flashMode){
+                FlashMode.AUTO->{
+                    captureRequestBuilder?.set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON_AUTO_FLASH)
+                    captureRequestBuilder?.set(CaptureRequest.FLASH_MODE, CameraMetadata.FLASH_MODE_OFF)
+                }
+                FlashMode.ON ->{
+                    captureRequestBuilder?.set(CaptureRequest.CONTROL_AE_MODE, CameraMetadata.CONTROL_AE_MODE_ON_ALWAYS_FLASH)
+                    captureRequestBuilder?.set(CaptureRequest.FLASH_MODE, CameraMetadata.FLASH_MODE_SINGLE)
+                }
+                FlashMode.OFF->{
+                    captureRequestBuilder?.set(CaptureRequest.CONTROL_AE_MODE, CameraMetadata.CONTROL_AE_MODE_ON)
+                    captureRequestBuilder?.set(CaptureRequest.FLASH_MODE, CameraMetadata.FLASH_MODE_OFF)
+                }
+            }
+            this.flashMode = flashMode
+            cameraCaptureSessions?.setRepeatingRequest(captureRequestBuilder!!.build(), null, null)
+            return true
+        }else{
+            return false
+        }
+    }
+
+    fun zoomCamera(cameraZoomEvent: Boolean, scale:Float=0.5f) {
         cameraCharacteristics?.let {
             val rect = it.get(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE)
             if (rect == null) return
 
-            val delta = 0.5f
+            val delta = scale
             if (cameraZoomEvent) {
                 zoomLevel = Math.min(zoomLevel + delta, maximumZoomLevel)
             } else {
@@ -363,19 +428,26 @@ class CameraView:RelativeLayout{
 
             // calculate size
             val characteristics = manager.getCameraCharacteristics(cameraDevice!!.getId())
-            var jpegSizes: Array<Size>? = null
-            if (characteristics != null) {
-                jpegSizes =
-                    characteristics.get<StreamConfigurationMap>(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)!!.getOutputSizes(
-                        ImageFormat.JPEG
-                    )
-            }
+
             var width = 640
             var height = 480
-            if (jpegSizes != null && 0 < jpegSizes.size) {
-                width = jpegSizes[0].width
-                height = jpegSizes[0].height
+            imageDimension?.let {
+                width=it.width
+                height=it.height
+            }?:kotlin.run {
+                var jpegSizes: Array<Size>? = null
+                if (characteristics != null) {
+                    jpegSizes =
+                        characteristics.get<StreamConfigurationMap>(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)!!.getOutputSizes(
+                            ImageFormat.JPEG
+                        )
+                }
+                if (jpegSizes != null && 0 < jpegSizes.size) {
+                    width = jpegSizes[0].width
+                    height = jpegSizes[0].height
+                }
             }
+
 
             val readerListener = object : ImageReader.OnImageAvailableListener {
                 override fun onImageAvailable(reader: ImageReader) {
@@ -385,21 +457,24 @@ class CameraView:RelativeLayout{
                         val buffer = image!!.getPlanes()[0].getBuffer()
                         val bytes = ByteArray(buffer.capacity())
                         buffer.get(bytes)
-                        save(bytes)
+                        fileUri = save(bytes)
+                        fileUri?.let {
+                            cameraViewCallback?.onImageCaptured(it)
+                        }
                     } catch (e: FileNotFoundException) {
                         e.printStackTrace()
                     } catch (e: IOException) {
                         e.printStackTrace()
                     } finally {
                         if (image != null) {
-                            image!!.close()
+                            image.close()
                         }
                     }
                 }
 
                 @Throws(IOException::class)
-                private fun save(bytes: ByteArray) {
-                    var output: OutputStream? = null
+                private fun save(bytes: ByteArray):Uri? {
+                    /*var output: OutputStream? = null
                     try {
                         output = FileOutputStream(file)
                         output.write(bytes)
@@ -407,6 +482,61 @@ class CameraView:RelativeLayout{
                         if (null != output) {
                             output.close()
                         }
+                    }*/
+                    fun contentValues() : ContentValues {
+                        val values = ContentValues()
+                        val str =  context.getString(R.string.app_name)
+                        values.put(MediaStore.Images.Media.MIME_TYPE, "image/jpeg")
+                        values.put(MediaStore.Images.Media.DATE_TAKEN, System.currentTimeMillis())
+                        values.put(MediaStore.Images.Media.TITLE, str)
+                        values.put(MediaStore.Images.ImageColumns.BUCKET_ID, str.hashCode())
+                        values.put(MediaStore.Images.ImageColumns.BUCKET_DISPLAY_NAME, str)
+                        return values
+                    }
+
+                    fun saveImageToStream(bytes: ByteArray, outputStream: OutputStream?) {
+                        if (outputStream != null) {
+                            try {
+                                outputStream.write(bytes)
+                                outputStream.close()
+                            } catch (e: Exception) {
+                                e.printStackTrace()
+                            }
+                        }
+                    }
+
+                    // Check if we're running on Android 5.0 or higher
+                    if (Build.VERSION.SDK_INT >= 29) {
+                        val values = contentValues()
+                        values.put(MediaStore.Images.Media.RELATIVE_PATH, Environment.DIRECTORY_PICTURES + "/$cameraDir")
+                        values.put(MediaStore.Images.Media.IS_PENDING, true)
+                        // RELATIVE_PATH and IS_PENDING are introduced in API 29.
+
+                        val uri: Uri? = context.contentResolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values)
+                        if (uri != null) {
+                            saveImageToStream(bytes, context.contentResolver.openOutputStream(uri))
+                            values.put(MediaStore.Images.Media.IS_PENDING, false)
+                            values.put(MediaStore.Images.Media.DATE_TAKEN, System.currentTimeMillis())
+                            context.contentResolver.update(uri, values, null, null)
+                        }
+                        return uri
+                    } else {
+                        val directory = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_PICTURES).absolutePath  + "/$cameraDir")
+                        if (!directory.exists()) {
+                            directory.mkdirs()
+                        }
+                        // getExternalStorageDirectory is deprecated in API 29
+
+                        val fileName = System.currentTimeMillis().toString() + ".jpg"
+                        val file = File(directory, fileName)
+                        saveImageToStream(bytes, FileOutputStream(file))
+                        if (file.absolutePath != null) {
+                            val values = contentValues()
+                            values.put(MediaStore.Images.Media.DATA, file.absolutePath)
+                            // .DATA is deprecated in API 29
+                            context.contentResolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values)
+                        }
+                        return Uri.fromFile(file)
                     }
                 }
             }
@@ -435,8 +565,6 @@ class CameraView:RelativeLayout{
                 }
 
 
-            file = File(Environment.getExternalStorageDirectory().path + "/CustomCamera.jpg")
-
             val captureListener = object : CameraCaptureSession.CaptureCallback() {
                 override fun onCaptureCompleted(
                     session: CameraCaptureSession,
@@ -444,7 +572,7 @@ class CameraView:RelativeLayout{
                     result: TotalCaptureResult
                 ) {
                     super.onCaptureCompleted(session, request, result)
-                    Toast.makeText(context, "Saved:$file", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(context, "Saved:${fileUri.toString()}", Toast.LENGTH_SHORT).show()
                     createCameraPreview()
                 }
             }
@@ -472,7 +600,7 @@ class CameraView:RelativeLayout{
         }
     }
 
-    public fun onResume() {
+    fun onResume() {
         Log.e(TAG, "onResume");
         zoom = null
         startBackgroundThread()
@@ -483,11 +611,20 @@ class CameraView:RelativeLayout{
         }
     }
 
-    public fun onPause() {
+    fun onPause() {
         Log.e(TAG, "onPause")
         closeCamera();
         stopBackgroundThread()
     }
     //endregion
 
+    /**
+     * Compares two `Size`s based on their areas.
+     */
+    internal class CompareSizesByArea : Comparator<Size> {
+
+        // We cast here to ensure the multiplications won't overflow
+        override fun compare(lhs: Size, rhs: Size) =
+            Long.signum(lhs.width.toLong() * lhs.height - rhs.width.toLong() * rhs.height)
+    }
 }

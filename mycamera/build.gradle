@@ -1,6 +1,31 @@
 apply plugin: 'com.android.library'
 apply plugin: 'kotlin-android'
 apply plugin: 'kotlin-android-extensions'
+apply plugin: 'com.jfrog.bintray'                   // Apply Bintray plugin
+apply plugin: 'com.github.dcendents.android-maven'  // Apply maven plugin
+
+ext {
+    bintrayRepo = "MyLibrary"               // repository name in bintray dashboard
+    bintrayName = "com.trenser.mycamera"    // package name in bintray dashboard
+
+    libraryName = "mycamera"                // module name in android studio project
+
+    publishedGroupId = "com.trenser.mylibrary"
+    artifact = "mycamera"
+    libraryVersion = "0.0.2"
+
+    libraryDescription = "custom camera"
+    siteUrl = "https://github.com/pongummoodu/MyLibrary"
+    gitUrl = "https://github.com/pongummoodu/MyLibrary.git"
+    developerId = "pongummoodu"
+    developerName = "Bijin Baby"
+    developerEmail = "bijin.baby@trenser.com"
+    licenseName = "The Apache Software License, Version 2.0"
+    licenseUrl = "https://github.com/pongummoodu/MyLibrary/blob/master/license.txt"
+    allLicenses = ["Apache-2.0"]
+
+}
+
 android {
     compileSdkVersion 29
     buildToolsVersion "29.0.1"
@@ -10,7 +35,7 @@ android {
         minSdkVersion 21
         targetSdkVersion 29
         versionCode 1
-        versionName "1.0"
+        versionName "0.0.2"
 
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         consumerProguardFiles 'consumer-rules.pro'
@@ -30,7 +55,14 @@ dependencies {
     implementation "org.jetbrains.kotlin:kotlin-stdlib-jdk7:$kotlin_version"
     implementation 'androidx.appcompat:appcompat:1.1.0'
     implementation 'androidx.core:core-ktx:1.1.0'
+    implementation 'androidx.legacy:legacy-support-v4:1.0.0'
     testImplementation 'junit:junit:4.12'
     androidTestImplementation 'androidx.test.ext:junit:1.1.0'
     androidTestImplementation 'androidx.test.espresso:espresso-core:3.2.0'
+}
+
+//use below code to publish to bintray. the script from these github file upload arr automatically to bintray
+if (project.rootProject.file('local.properties').exists()) {
+    apply from: "https://raw.githubusercontent.com/nuuneoi/JCenter/master/installv1.gradle"
+    apply from: "https://raw.githubusercontent.com/nuuneoi/JCenter/master/bintrayv1.gradle"
 }
