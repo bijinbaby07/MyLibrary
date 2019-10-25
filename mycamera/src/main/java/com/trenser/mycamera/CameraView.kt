@@ -4,9 +4,7 @@ import android.Manifest
 import android.content.ContentValues
 import android.content.Context
 import android.content.pm.PackageManager
-import android.graphics.ImageFormat
-import android.graphics.Rect
-import android.graphics.SurfaceTexture
+import android.graphics.*
 import android.hardware.camera2.*
 import android.hardware.camera2.params.StreamConfigurationMap
 import android.media.Image
@@ -36,12 +34,15 @@ class CameraView:RelativeLayout{
     interface ICameraViewCallback{
         fun onCameraError(errorCode:Int)
         fun onImageCaptured(uri: Uri){}
+        fun onImageCaptured(bitmap: Bitmap){}
+        fun onCameraOpened(camera: CameraDevice){}
+        fun onCameraClosed(camera: CameraDevice){}
     }
 
-    enum class FlashMode(val value:Int){
-        AUTO(0),
-        ON(1),
-        OFF(2)
+    enum class FlashMode(val value:Int, val strValue: String){
+        AUTO(0,"auto"),
+        ON(1,"on"),
+        OFF(2,"off")
     }
 
     companion object{
@@ -77,14 +78,17 @@ class CameraView:RelativeLayout{
     private var zoom: Rect? = null
     private var zoomLevel = 1f
     private var fingerSpacing = 0f
-    private var maximumZoomLevel = 0f
     private var cameraCharacteristics: CameraCharacteristics? = null
+
+    var maximumZoomLevel = 0f
+        private set
 
     var cameraViewCallback: ICameraViewCallback?=null
     var isFrontCamera = false
     var flashMode:FlashMode = FlashMode.AUTO
     var cameraDir = "ImagePickerLibrary"
     var imageRatio = 4f/3f
+    var shouldSaveImage = true
 
     constructor(context: Context) : super(context) {
         init(context, null, 0)
@@ -201,14 +205,17 @@ class CameraView:RelativeLayout{
             Log.e(TAG, "onOpened")
             cameraDevice = camera
             createCameraPreview()
+            cameraViewCallback?.onCameraOpened(camera)
         }
 
         override fun onDisconnected(camera: CameraDevice) {
             cameraDevice?.close()
+            cameraViewCallback?.onCameraClosed(camera)
         }
 
         override fun onError(camera: CameraDevice, error: Int) {
             cameraDevice?.close()
+            cameraViewCallback?.onCameraClosed(camera)
             cameraDevice = null
         }
     }
@@ -457,9 +464,20 @@ class CameraView:RelativeLayout{
                         val buffer = image!!.getPlanes()[0].getBuffer()
                         val bytes = ByteArray(buffer.capacity())
                         buffer.get(bytes)
-                        fileUri = save(bytes)
-                        fileUri?.let {
-                            cameraViewCallback?.onImageCaptured(it)
+                        if(shouldSaveImage){
+                            fileUri = save(bytes)
+                            fileUri?.let {
+                                cameraViewCallback?.onImageCaptured(it)
+                            }
+                        }else{
+                            val options = BitmapFactory.Options()//to reduce size
+                            options.inPreferredConfig = Bitmap.Config.RGB_565
+                            var bmp = BitmapFactory.decodeByteArray(bytes, 0, bytes.size, options)
+                            if (isFrontCamera) {
+                                //invert image horizontal
+                                bmp = invert(bmp, true)
+                            }
+                            cameraViewCallback?.onImageCaptured(bmp)
                         }
                     } catch (e: FileNotFoundException) {
                         e.printStackTrace()
@@ -472,17 +490,17 @@ class CameraView:RelativeLayout{
                     }
                 }
 
+               private fun invert(bitmap: Bitmap, isHorizondal: Boolean): Bitmap {
+                    val matrix = Matrix()
+                    if (isHorizondal)
+                        matrix.postScale(-1f, 1f, (bitmap.width / 2).toFloat(), (bitmap.height / 2).toFloat())
+                    else
+                        matrix.postScale(1f, -1f, (bitmap.width / 2).toFloat(), (bitmap.height / 2).toFloat())
+                    return Bitmap.createBitmap(bitmap, 0, 0, bitmap.width, bitmap.height, matrix, true)
+                }
+
                 @Throws(IOException::class)
                 private fun save(bytes: ByteArray):Uri? {
-                    /*var output: OutputStream? = null
-                    try {
-                        output = FileOutputStream(file)
-                        output.write(bytes)
-                    } finally {
-                        if (null != output) {
-                            output.close()
-                        }
-                    }*/
                     fun contentValues() : ContentValues {
                         val values = ContentValues()
                         val str =  context.getString(R.string.app_name)
@@ -554,6 +572,24 @@ class CameraView:RelativeLayout{
                     addTarget(reader.surface)
                     set(CaptureRequest.CONTROL_MODE, CameraMetadata.CONTROL_MODE_AUTO)
 
+                    if(mFlashSupported){
+                        when(flashMode){
+                            FlashMode.AUTO->{
+                                set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON_AUTO_FLASH)
+                                set(CaptureRequest.FLASH_MODE, CameraMetadata.FLASH_MODE_OFF)
+                            }
+                            FlashMode.ON ->{
+                                set(CaptureRequest.CONTROL_AE_MODE, CameraMetadata.CONTROL_AE_MODE_ON_ALWAYS_FLASH)
+                                set(CaptureRequest.FLASH_MODE, CameraMetadata.FLASH_MODE_SINGLE)
+                            }
+                            FlashMode.OFF->{
+                                set(CaptureRequest.CONTROL_AE_MODE, CameraMetadata.CONTROL_AE_MODE_ON)
+                                set(CaptureRequest.FLASH_MODE, CameraMetadata.FLASH_MODE_OFF)
+                            }
+                        }
+                    }
+
+
                     //Zoom
                     if (zoom != null) {
                         set(CaptureRequest.SCALER_CROP_REGION, zoom);
@@ -561,7 +597,11 @@ class CameraView:RelativeLayout{
 
                     // Orientation
                     val rotation = (context.getSystemService(Context.WINDOW_SERVICE) as WindowManager).defaultDisplay.rotation
-                    set(CaptureRequest.JPEG_ORIENTATION, ORIENTATIONS.get(rotation))
+                    //set(CaptureRequest.JPEG_ORIENTATION, ORIENTATIONS.get(rotation))
+                    val surfaceRotation = ORIENTATIONS.get(rotation)
+                    val sensorOrientation =  characteristics.get(CameraCharacteristics.SENSOR_ORIENTATION) ?: 0
+                    val jpegOrientation = (surfaceRotation + sensorOrientation + 270) % 360
+                    set(CaptureRequest.JPEG_ORIENTATION, jpegOrientation)
                 }
 
 

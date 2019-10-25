@@ -12,7 +12,7 @@ ext {
 
     publishedGroupId = "com.trenser.mylibrary"
     artifact = "mycamera"
-    libraryVersion = "0.0.2"
+    libraryVersion = "0.0.5"
 
     libraryDescription = "custom camera"
     siteUrl = "https://github.com/pongummoodu/MyLibrary"
@@ -35,7 +35,7 @@ android {
         minSdkVersion 21
         targetSdkVersion 29
         versionCode 1
-        versionName "0.0.2"
+        versionName libraryVersion
 
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         consumerProguardFiles 'consumer-rules.pro'
