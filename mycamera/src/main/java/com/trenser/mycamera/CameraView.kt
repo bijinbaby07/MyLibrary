@@ -10,10 +10,7 @@ import android.hardware.camera2.params.StreamConfigurationMap
 import android.media.Image
 import android.media.ImageReader
 import android.net.Uri
-import android.os.Build
-import android.os.Environment
-import android.os.Handler
-import android.os.HandlerThread
+import android.os.*
 import android.provider.MediaStore
 import android.util.AttributeSet
 import android.util.Log
@@ -364,6 +361,8 @@ class CameraView:RelativeLayout{
             )
         } catch (e: CameraAccessException) {
             e.printStackTrace()
+        } catch (e2:IllegalStateException){
+            e2.printStackTrace()
         }
     }
 
@@ -467,7 +466,9 @@ class CameraView:RelativeLayout{
                         if(shouldSaveImage){
                             fileUri = save(bytes)
                             fileUri?.let {
-                                cameraViewCallback?.onImageCaptured(it)
+                                Handler(Looper.getMainLooper()).post {
+                                    cameraViewCallback?.onImageCaptured(it)
+                                }
                             }
                         }else{
                             val options = BitmapFactory.Options()//to reduce size
@@ -477,7 +478,9 @@ class CameraView:RelativeLayout{
                                 //invert image horizontal
                                 bmp = invert(bmp, true)
                             }
-                            cameraViewCallback?.onImageCaptured(bmp)
+                            Handler(Looper.getMainLooper()).post {
+                                cameraViewCallback?.onImageCaptured(bmp)
+                            }
                         }
                     } catch (e: FileNotFoundException) {
                         e.printStackTrace()
@@ -612,7 +615,7 @@ class CameraView:RelativeLayout{
                     result: TotalCaptureResult
                 ) {
                     super.onCaptureCompleted(session, request, result)
-                    Toast.makeText(context, "Saved:${fileUri.toString()}", Toast.LENGTH_SHORT).show()
+//                    Toast.makeText(context, "Saved:${fileUri.toString()}", Toast.LENGTH_SHORT).show()
                     createCameraPreview()
                 }
             }
