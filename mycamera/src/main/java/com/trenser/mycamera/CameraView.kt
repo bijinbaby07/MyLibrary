@@ -366,6 +366,74 @@ class CameraView:RelativeLayout{
         }
     }
 
+    @Throws(IOException::class)
+    private fun save(bytes: ByteArray):Uri? {
+        fun contentValues() : ContentValues {
+            val values = ContentValues()
+            val str =  context.getString(R.string.app_name)
+            values.put(MediaStore.Images.Media.MIME_TYPE, "image/jpeg")
+            values.put(MediaStore.Images.Media.DATE_TAKEN, System.currentTimeMillis())
+            values.put(MediaStore.Images.Media.TITLE, str)
+            values.put(MediaStore.Images.ImageColumns.BUCKET_ID, str.hashCode())
+            values.put(MediaStore.Images.ImageColumns.BUCKET_DISPLAY_NAME, str)
+            return values
+        }
+
+        fun saveImageToStream(bytes: ByteArray, outputStream: OutputStream?) {
+            if (outputStream != null) {
+                try {
+                    outputStream.write(bytes)
+                    outputStream.close()
+                } catch (e: Exception) {
+                    e.printStackTrace()
+                }
+            }
+        }
+
+        // Check if we're running on Android 5.0 or higher
+        if (Build.VERSION.SDK_INT >= 29) {
+            val values = contentValues()
+            values.put(MediaStore.Images.Media.RELATIVE_PATH, Environment.DIRECTORY_PICTURES + "/$cameraDir")
+            values.put(MediaStore.Images.Media.IS_PENDING, true)
+            // RELATIVE_PATH and IS_PENDING are introduced in API 29.
+
+            val uri: Uri? = context.contentResolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values)
+            if (uri != null) {
+                saveImageToStream(bytes, context.contentResolver.openOutputStream(uri))
+                values.put(MediaStore.Images.Media.IS_PENDING, false)
+                values.put(MediaStore.Images.Media.DATE_TAKEN, System.currentTimeMillis())
+                context.contentResolver.update(uri, values, null, null)
+            }
+            return uri
+        } else {
+            val directory = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_PICTURES).absolutePath  + "/$cameraDir")
+            if (!directory.exists()) {
+                directory.mkdirs()
+            }
+            // getExternalStorageDirectory is deprecated in API 29
+
+            val fileName = System.currentTimeMillis().toString() + ".jpg"
+            val file = File(directory, fileName)
+            saveImageToStream(bytes, FileOutputStream(file))
+            if (file.absolutePath != null) {
+                val values = contentValues()
+                values.put(MediaStore.Images.Media.DATA, file.absolutePath)
+                // .DATA is deprecated in API 29
+                context.contentResolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values)
+            }
+            return Uri.fromFile(file)
+        }
+    }
+
+    private fun invert(bitmap: Bitmap, isHorizondal: Boolean): Bitmap {
+        val matrix = Matrix()
+        if (isHorizondal)
+            matrix.postScale(-1f, 1f, (bitmap.width / 2).toFloat(), (bitmap.height / 2).toFloat())
+        else
+            matrix.postScale(1f, -1f, (bitmap.width / 2).toFloat(), (bitmap.height / 2).toFloat())
+        return Bitmap.createBitmap(bitmap, 0, 0, bitmap.width, bitmap.height, matrix, true)
+    }
+
 
     //region Public api
     fun switchCamera(){
@@ -463,25 +531,7 @@ class CameraView:RelativeLayout{
                         val buffer = image!!.getPlanes()[0].getBuffer()
                         val bytes = ByteArray(buffer.capacity())
                         buffer.get(bytes)
-                        if(shouldSaveImage){
-                            fileUri = save(bytes)
-                            fileUri?.let {
-                                Handler(Looper.getMainLooper()).post {
-                                    cameraViewCallback?.onImageCaptured(it)
-                                }
-                            }
-                        }else{
-                            val options = BitmapFactory.Options()//to reduce size
-                            options.inPreferredConfig = Bitmap.Config.RGB_565
-                            var bmp = BitmapFactory.decodeByteArray(bytes, 0, bytes.size, options)
-                            if (isFrontCamera) {
-                                //invert image horizontal
-                                bmp = invert(bmp, true)
-                            }
-                            Handler(Looper.getMainLooper()).post {
-                                cameraViewCallback?.onImageCaptured(bmp)
-                            }
-                        }
+                        onImageCaptured(bytes)
                     } catch (e: FileNotFoundException) {
                         e.printStackTrace()
                     } catch (e: IOException) {
@@ -490,74 +540,6 @@ class CameraView:RelativeLayout{
                         if (image != null) {
                             image.close()
                         }
-                    }
-                }
-
-               private fun invert(bitmap: Bitmap, isHorizondal: Boolean): Bitmap {
-                    val matrix = Matrix()
-                    if (isHorizondal)
-                        matrix.postScale(-1f, 1f, (bitmap.width / 2).toFloat(), (bitmap.height / 2).toFloat())
-                    else
-                        matrix.postScale(1f, -1f, (bitmap.width / 2).toFloat(), (bitmap.height / 2).toFloat())
-                    return Bitmap.createBitmap(bitmap, 0, 0, bitmap.width, bitmap.height, matrix, true)
-                }
-
-                @Throws(IOException::class)
-                private fun save(bytes: ByteArray):Uri? {
-                    fun contentValues() : ContentValues {
-                        val values = ContentValues()
-                        val str =  context.getString(R.string.app_name)
-                        values.put(MediaStore.Images.Media.MIME_TYPE, "image/jpeg")
-                        values.put(MediaStore.Images.Media.DATE_TAKEN, System.currentTimeMillis())
-                        values.put(MediaStore.Images.Media.TITLE, str)
-                        values.put(MediaStore.Images.ImageColumns.BUCKET_ID, str.hashCode())
-                        values.put(MediaStore.Images.ImageColumns.BUCKET_DISPLAY_NAME, str)
-                        return values
-                    }
-
-                    fun saveImageToStream(bytes: ByteArray, outputStream: OutputStream?) {
-                        if (outputStream != null) {
-                            try {
-                                outputStream.write(bytes)
-                                outputStream.close()
-                            } catch (e: Exception) {
-                                e.printStackTrace()
-                            }
-                        }
-                    }
-
-                    // Check if we're running on Android 5.0 or higher
-                    if (Build.VERSION.SDK_INT >= 29) {
-                        val values = contentValues()
-                        values.put(MediaStore.Images.Media.RELATIVE_PATH, Environment.DIRECTORY_PICTURES + "/$cameraDir")
-                        values.put(MediaStore.Images.Media.IS_PENDING, true)
-                        // RELATIVE_PATH and IS_PENDING are introduced in API 29.
-
-                        val uri: Uri? = context.contentResolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values)
-                        if (uri != null) {
-                            saveImageToStream(bytes, context.contentResolver.openOutputStream(uri))
-                            values.put(MediaStore.Images.Media.IS_PENDING, false)
-                            values.put(MediaStore.Images.Media.DATE_TAKEN, System.currentTimeMillis())
-                            context.contentResolver.update(uri, values, null, null)
-                        }
-                        return uri
-                    } else {
-                        val directory = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_PICTURES).absolutePath  + "/$cameraDir")
-                        if (!directory.exists()) {
-                            directory.mkdirs()
-                        }
-                        // getExternalStorageDirectory is deprecated in API 29
-
-                        val fileName = System.currentTimeMillis().toString() + ".jpg"
-                        val file = File(directory, fileName)
-                        saveImageToStream(bytes, FileOutputStream(file))
-                        if (file.absolutePath != null) {
-                            val values = contentValues()
-                            values.put(MediaStore.Images.Media.DATA, file.absolutePath)
-                            // .DATA is deprecated in API 29
-                            context.contentResolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values)
-                        }
-                        return Uri.fromFile(file)
                     }
                 }
             }
@@ -660,6 +642,28 @@ class CameraView:RelativeLayout{
         stopBackgroundThread()
     }
     //endregion
+
+    fun onImageCaptured(bytes: ByteArray){
+        if(shouldSaveImage){
+            fileUri = save(bytes)
+            fileUri?.let {
+                Handler(Looper.getMainLooper()).post {
+                    cameraViewCallback?.onImageCaptured(it)
+                }
+            }
+        }else{
+            val options = BitmapFactory.Options()//to reduce size
+            options.inPreferredConfig = Bitmap.Config.RGB_565
+            var bmp = BitmapFactory.decodeByteArray(bytes, 0, bytes.size, options)
+            if (isFrontCamera) {
+                //invert image horizontal
+                bmp = invert(bmp, true)
+            }
+            Handler(Looper.getMainLooper()).post {
+                cameraViewCallback?.onImageCaptured(bmp)
+            }
+        }
+    }
 
     /**
      * Compares two `Size`s based on their areas.
