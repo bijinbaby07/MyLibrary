@@ -26,7 +26,7 @@ import java.lang.Long
 import java.util.*
 import kotlin.collections.ArrayList
 
-class CameraView:RelativeLayout{
+open class CameraView:RelativeLayout{
 
     interface ICameraViewCallback{
         fun onCameraError(errorCode:Int)

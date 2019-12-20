@@ -12,7 +12,7 @@ ext {
 
     publishedGroupId = "com.trenser.mylibrary"
     artifact = "mycamera"
-    libraryVersion = "0.0.9"
+    libraryVersion = "0.1.0"
 
     libraryDescription = "custom camera"
     siteUrl = "https://github.com/pongummoodu/MyLibrary"
