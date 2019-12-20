@@ -442,7 +442,7 @@ open class CameraView:RelativeLayout{
         onResume()
     }
 
-    fun setFlashMode(flashMode:FlashMode):Boolean{
+    open fun setFlashMode(flashMode:FlashMode):Boolean{
         if(mFlashSupported){
             when(flashMode){
                 FlashMode.AUTO->{
@@ -466,7 +466,7 @@ open class CameraView:RelativeLayout{
         }
     }
 
-    fun zoomCamera(cameraZoomEvent: Boolean, scale:Float=0.5f) {
+   open fun zoomCamera(cameraZoomEvent: Boolean, scale:Float=0.5f) {
         cameraCharacteristics?.let {
             val rect = it.get(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE)
             if (rect == null) return
@@ -492,7 +492,7 @@ open class CameraView:RelativeLayout{
         }
     }
 
-    fun takePicture() {
+   open fun takePicture() {
         if (null == cameraDevice) {
             Log.e(TAG, "cameraDevice is null")
             return
@@ -625,7 +625,7 @@ open class CameraView:RelativeLayout{
         }
     }
 
-    fun onResume() {
+    open fun onResume() {
         Log.e(TAG, "onResume");
         zoom = null
         startBackgroundThread()
@@ -636,14 +636,14 @@ open class CameraView:RelativeLayout{
         }
     }
 
-    fun onPause() {
+   open fun onPause() {
         Log.e(TAG, "onPause")
         closeCamera();
         stopBackgroundThread()
     }
     //endregion
 
-    fun onImageCaptured(bytes: ByteArray){
+   open fun onImageCaptured(bytes: ByteArray){
         if(shouldSaveImage){
             fileUri = save(bytes)
             fileUri?.let {
